@@ -1,0 +1,145 @@
+; ============================================================
+;  MESHMERIZE CHAMPION — KiCad PCB DESIGN NOTES  v5.0
+;  Custom 2-layer FR4 PCB (serves as robot chassis floor)
+;  Board dimensions: 170mm × 150mm × 1.6mm
+;  UPDATED: Pin map synced to ESP32-S3-DevKitC-1 (NOT original ESP32)
+; ============================================================
+
+[BOARD_INFO]
+Layers      = 2  (F.Cu, B.Cu)
+Dimensions  = 170mm × 150mm
+Thickness   = 1.6mm FR4
+Copper      = 1oz (35µm)
+Silkscreen  = F.Silkscreen
+Finish      = HASL
+
+; ── POWER RAILS ─────────────────────────────────────────────
+; 11.1V (3S LiPo) → VMOT  : trace width = 3.0mm (motors draw up to 3A burst)
+; 5V  (Pololu D24V22F5 Buck) : trace width = 1.5mm
+; 3.3V (TI LP5907 or AMS1117): trace width = 1.0mm
+; GND plane on B.Cu          (full copper pour, stitched with vias)
+;
+; ── CRITICAL: STAR GROUND ───────────────────────────────────
+; Motor return GND MUST connect directly to battery (-) pad via
+; a dedicated 3mm trace. DO NOT route through sensor ground planes.
+
+[POWER_SECTION]
+C1  = 470µF / 16V electrolytic    ; Motor supply bulk decoupling (at LiPo terminal)
+C2  = 470µF / 16V electrolytic    ; Motor supply bulk decoupling (at DRV8874 VM pin)
+C3  = 100µF / 10V electrolytic    ; 5V bulk (Pololu buck output)
+C4  = 100µF / 10V electrolytic    ; 3.3V bulk (LP5907 output)
+C5  = 10µF  / 10V ceramic 0805    ; LP5907 input filter
+C6  = 10µF  / 10V ceramic 0805    ; LP5907 output filter
+C7–C20 = 100nF 0402 ceramic      ; One per IC power pin (ESP32 VDD, IMU VDD, DRV8874 VCC)
+D1  = SS54 Schottky (5A/40V)     ; Reverse polarity protection on VMOT
+R_VDIV1 = 100kΩ 0402 1%          ; Battery voltage divider upper leg
+R_VDIV2 = 27kΩ  0402 1%          ; Battery voltage divider lower leg
+;                                   V_adc_max = 12.6 × 27/127 = 2.68V ✓ (< 3.3V ESP32 max)
+
+[COMPONENT_PLACEMENT]
+; Center-of-gravity strategy: keep heavy components at axle midline
+;
+;  ┌──────────────────────────────────────────────────┐
+;  │  [FRONT SENSOR BAR: 2× QTR-8RC]                 │
+;  │     ← 80mm wide, 8mm from front edge →          │
+;  │     Left QTR-8RC: GPIO 35–42                    │
+;  │     Right QTR-8RC: GPIO 43–50                   │
+;  ├──────────────────────────────────────────────────┤
+;  │ [Motor L]  [Pololu Buck][LP5907]  [Motor R]      │
+;  │ [EncL]     [LiPo centred]         [EncR]         │
+;  │            [ESP32-S3-DevKitC-1]                  │
+;  │            [IMU - exact centre]                  │
+;  │            [DRV8874 or TB6612FNG]                │
+;  │ [Ball Caster – front centre]                     │
+;  └──────────────────────────────────────────────────┘
+
+[SENSOR_ARRAY]
+; 2× Pololu QTR-8RC sensor arrays, one each side, 8 sensors per board
+; Sensor pitch: 9.525mm (native QTR-8RC pitch)
+; Total span: ~75mm centred on chassis
+; No analog MUX required — sensors use RC-discharge digital timing directly
+; Left  array GPIO: 35, 36, 37, 38, 39, 40, 41, 42
+; Right array GPIO: 43, 44, 45, 46, 47, 48, 49, 50
+; Emitter control: shared emitter pin (optional, see QTRSensors lib)
+; Sensor mounting height: 4–6mm above arena surface (optimal for QTR-8RC)
+
+[MOTOR_DRIVER]
+; PRIMARY: TI DRV8874 (or DRV8876 Dual Breakout)
+; FALLBACK: Toshiba TB6612FNG (also compatible with this pinout)
+;
+; DRV8874 / TB6612FNG pinout to ESP32-S3:
+;   VM  / VMOT       = 11.1V (3S LiPo direct, post SS54 diode)
+;   VCC / VCC        = 5V (Pololu D24V22F5 output)
+;   AIN1             = GPIO 4  (Left motor direction 1)
+;   AIN2             = GPIO 5  (Left motor direction 2)
+;   PWMA             = GPIO 6  (Left motor PWM, LEDC ch0 @ 20kHz)
+;   BIN1             = GPIO 7  (Right motor direction 1)
+;   BIN2             = GPIO 15 (Right motor direction 2)
+;   PWMB             = GPIO 16 (Right motor PWM, LEDC ch1 @ 20kHz)
+;   STBY / ENABLE    = GPIO 17 (HIGH = active)
+; Flyback protection: 100nF ceramic caps on each motor terminal to GND
+; Ferrite beads (600Ω @ 100MHz) in series with PWMA and PWMB lines
+
+[ENCODER]
+; Magnetic hall-effect encoder (integrated in Pololu 20:1 HPCB motors)
+; CPR: 12 CPR on motor shaft × 20:1 gearbox = 240 PPR at wheel
+; CHANGE-mode interrupts (both edges) → 480 counts/rev → 0.209mm/tick
+;   ENC_LA = GPIO 8   (Left  Phase A — hardware interrupt, CHANGE)
+;   ENC_LB = GPIO 9   (Left  Phase B — direction read in ISR)
+;   ENC_RA = GPIO 10  (Right Phase A — hardware interrupt, CHANGE)
+;   ENC_RB = GPIO 11  (Right Phase B — direction read in ISR)
+; Pull-up: 10kΩ to 3.3V on all encoder inputs
+; NOTE: GPIO 34–39 DO NOT EXIST on ESP32-S3 (they exist on original ESP32)
+
+[IMU]
+; TDK ICM-42688-P or MPU-6050 (GY-521) — I2C @ 400kHz
+;   SDA = GPIO 1
+;   SCL = GPIO 2
+;   VCC = 3.3V (from dedicated LP5907 LDO rail)
+;   INT = (unused — polled in firmware)
+; Place at PCB geometric centre for accurate rotation measurement
+; 100nF decoupling cap between VCC and GND, placed within 3mm of IC
+
+[USER_IO]
+; Toggle Switch (Rule 2 — single start switch)
+;   Connected between GPIO 0 (BOOT) and GND
+;   Internal pull-up enabled in firmware
+;
+; Red LED (Rule 3 — end zone indicator)
+;   Anode → GPIO 21 (via 220Ω series resistor)
+;   Cathode → GND
+;   Use high-brightness 5mm LED (>1500mcd)
+;
+; Battery voltage divider input:
+;   GPIO 3 (ADC1 Ch2) ← junction of R1=100kΩ and R2=27kΩ
+;   R1 top to VMOT, R2 bottom to GND
+;   Max ADC voltage = 12.6 × 27/127 = 2.68V (safe, below 3.3V ADC limit)
+
+[MECHANICAL]
+; Motor mounts: 2× M2.5 brass standoffs through PCB holes
+; Wheel axle centre: 55mm from PCB rear edge, 85mm from each side
+; Ball caster: 3/8" stainless steel ball, front-centre, 8mm height
+;   (adjusts so PCB is level with 32mm wheels + Pololu HPCB motor height)
+; Total weight target: < 170g
+; PCB acts as chassis — NO additional base plate required
+
+[DESIGN_RULES]
+Min trace width = 0.2mm (signal) / 1.5mm (5V) / 3.0mm (motor)
+Min clearance   = 0.2mm
+Via drill       = 0.8mm, annular ring = 0.4mm
+Silkscreen clearance from pads = 0.1mm
+Edge cuts: radius corners 2mm to reduce stress fractures
+GND pour stitching vias: every 5mm grid on B.Cu
+Power planes: NOT recommended for 2-layer (use ground pour only)
+
+[FABRICATION_CHECKLIST]
+; Before sending to JLCPCB / PCBWay:
+; [ ] Run DRC — zero violations
+; [ ] Check courtyard overlap — none
+; [ ] Verify power trace widths (3mm VMOT, 1.5mm 5V, 1.0mm 3.3V)
+; [ ] Confirm GPIO 34–39 are NOT used (they don't exist on ESP32-S3)
+; [ ] GND pour stitching vias at 5mm grid
+; [ ] Board outline in Edge.Cuts layer
+; [ ] Star ground: motor return separate from sensor analog GND
+; [ ] Gerber export: GTL, GBL, GTS, GBS, GTD, GBD, GKO
+; [ ] Drill file: Excellon format, metric
